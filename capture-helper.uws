@@ -1,0 +1,165 @@
+// --- キー設定定義 ---
+// 1, 2, 3の同時押しでキャプチャを実行する。欄が余った場合は、同じキーを複数指定して埋めてください。
+const ACTIVE_WIN_CAPTURE_KEY1 = VK_CTRL
+const ACTIVE_WIN_CAPTURE_KEY2 = VK_F1
+const ACTIVE_WIN_CAPTURE_KEY3 = VK_F1
+
+const FULL_SCREEN_CAPTURE_KEY_1 = VK_CTRL
+const FULL_SCREEN_CAPTURE_KEY_2 = VK_F2
+const FULL_SCREEN_CAPTURE_KEY_3 = VK_F2
+
+// --- 設定定義 ---
+public JPEG_QUALITY = 85 // JPEG保存時の画質（0～100）
+dim HIDE_FUKIDASI_ON_CAPTURE = true // キャプチャ時にFUKIDASIを非表示にするかどうか
+
+// --- 初期設定の読み込み ---
+dim iniFile = "capture-helper.ini"
+dim baseDir = READINI("Settings", "BaseDir", iniFile)
+dim folderFormat = READINI("Settings", "FolderFormat", iniFile)
+dim testTimes = VAL(READINI("Settings", "testTimes", iniFile))
+dim testCaseNo = VAL(READINI("Settings", "testCaseNo", iniFile))
+dim ext = READINI("Settings", "Extension", iniFile)
+
+// デフォルト値のフォールバック処理
+if baseDir = "" then baseDir = "evidence"
+if folderFormat = "" then folderFormat = "TestCaseNo{testCaseNo}_Run{testTimes}"
+if testTimes <= 0 then testTimes = 1
+if testCaseNo <= 0 then testCaseNo = 1
+if ext = "" then ext = "jpg"
+
+// 相対パスの絶対パス解決
+dim fso = createoleobj("Scripting.FileSystemObject")
+dim absBaseDir = ""
+ifb POS(":\\", baseDir) > 0 or COPY(baseDir, 1, 2) = "\\" then
+    absBaseDir = baseDir
+else
+    absBaseDir = fso.GetAbsolutePathName(GET_CUR_DIR + "\" + baseDir)
+endif
+
+// --- メインループ ---
+print "【操作】<#CR>" + _
+      "テスト回数 (左 [←] / 右 [→])<#CR>" + _
+      "テストケース (下 [↓] / 上 [↑])<#CR>" + _
+      "----------------------------------------<#CR>" + _
+      "Ctrl + F1: アクティブ画面保存<#CR>" + _
+      "Ctrl + F2: 全画面保存<#CR>" + _
+      "ESC キー: 終了（設定保存ダイアログを表示）"
+
+dim msg = ""
+while true
+    // 保存先フォルダの決定
+    dim currentFolder = GetTargetFolder(absBaseDir, folderFormat, testTimes, testCaseNo)
+    
+    // 画面左上にFUKIDASIを表示
+    if msg <> ("保存先: " + currentFolder)
+        msg = "保存先: " + currentFolder
+        FUKIDASI(msg, 10, 10, 0)
+    endif
+
+    // キー入力監視
+    ifb GETKEYSTATE(VK_UP)
+        testCaseNo = testCaseNo + 1
+        WaitKeyRelease(VK_UP)
+    elseif GETKEYSTATE(VK_DOWN)
+        testCaseNo = testCaseNo - 1
+        if testCaseNo < 1 then testCaseNo = 1
+        WaitKeyRelease(VK_DOWN)
+    elseif GETKEYSTATE(VK_RIGHT)
+        testTimes = testTimes + 1
+        WaitKeyRelease(VK_RIGHT)
+    elseif GETKEYSTATE(VK_LEFT)
+        testTimes = testTimes - 1
+        if testTimes < 1 then testTimes = 1
+        WaitKeyRelease(VK_LEFT)
+    elseif GETKEYSTATE(ACTIVE_WIN_CAPTURE_KEY1) and GETKEYSTATE(ACTIVE_WIN_CAPTURE_KEY2) and GETKEYSTATE(ACTIVE_WIN_CAPTURE_KEY3)
+        // アクティブウィンドウをキャプチャ（FUKIDASI以外の直前に選択していたウィンドウ）
+        if HIDE_FUKIDASI_ON_CAPTURE
+            FUKIDASI()
+            msg = ""
+        endif
+        CaptureScreen(currentFolder, ext, GETID(GET_ACTIVE_WIN))
+        WaitKeyRelease(ACTIVE_WIN_CAPTURE_KEY1)
+        WaitKeyRelease(ACTIVE_WIN_CAPTURE_KEY2)
+        WaitKeyRelease(ACTIVE_WIN_CAPTURE_KEY3)
+    elseif GETKEYSTATE(FULL_SCREEN_CAPTURE_KEY_1) and GETKEYSTATE(FULL_SCREEN_CAPTURE_KEY_2) and GETKEYSTATE(FULL_SCREEN_CAPTURE_KEY_3)
+        // 全画面キャプチャ
+        if HIDE_FUKIDASI_ON_CAPTURE
+            FUKIDASI()
+            msg = ""
+        endif
+        CaptureScreen(currentFolder, ext, 0)
+        WaitKeyRelease(FULL_SCREEN_CAPTURE_KEY_1)
+        WaitKeyRelease(FULL_SCREEN_CAPTURE_KEY_2)
+        WaitKeyRelease(FULL_SCREEN_CAPTURE_KEY_3)
+    elseif GETKEYSTATE(VK_ESCAPE)
+        // 終了処理
+        FUKIDASI() // FUKIDASIを消す
+        msg = ""
+        dim saveConfirm = MSGBOX("現在の状態(testTimes, testCaseNo)を設定ファイルに保存して終了しますか？", BTN_YES or BTN_NO or BTN_CANCEL)
+        ifb saveConfirm = BTN_YES then
+            WRITEINI("Settings", "testTimes", testTimes, iniFile)
+            WRITEINI("Settings", "testCaseNo", testCaseNo, iniFile)
+            exit
+        elseif saveConfirm = BTN_NO then
+            exit
+        endif
+    endif
+
+    SLEEP(0.03)
+wend
+
+// --- ヘルパー関数 ---
+
+// 保存先フォルダのパスを生成する関数
+function GetTargetFolder(base, folder, times, caseNo)
+    dim caseNoStr = ZeroPadding(caseNo, 2)
+    dim folderName = folder
+    folderName = REPLACE(folderName, "{testTimes}", times)
+    folderName = REPLACE(folderName, "{testCaseNo}", caseNoStr)
+    result = base + "\" + folderName
+fend
+
+// 画像を保存する関数
+procedure CaptureScreen(folder, extension, winID)
+    // フォルダの存在チェックと自動作成
+    dim fso = createoleobj("Scripting.FileSystemObject")
+    ifb ! fso.FolderExists(folder) then
+        DOSCMD("mkdir <#DBL>" + folder + "<#DBL>")
+    endif
+
+    // 次の連番ファイルパスを取得
+    dim savePath = ""
+    dim i = 1
+    while true
+        dim numStr = ZeroPadding(i, 3) // 3桁（001, 002...）
+        savePath = folder + "\" + numStr + "." + extension
+        ifb ! fso.FileExists(savePath) then
+            break
+        endif
+        i = i + 1
+    wend
+
+    // JPEG画質設定（拡張子がjpg/jpegの場合は高画質指定、それ以外はデフォルト）
+    dim jpegQuality = 0
+    ifb extension = "jpg" or extension = "jpeg" then
+        jpegQuality = JPEG_QUALITY
+    endif
+
+    // キャプチャ保存を実行
+    print savePath
+    SAVEIMG(savePath, winID, , , , , false, jpegQuality, IMG_FORE)  // タスクマネージャーなど、最前面に表示されているウィンドウを無視してアクティブウィンドウをキャプチャする場合は、IMG_FORE) -> IMG_BACK, true)に変更 (windows 10 1803以降必要)
+    SOUND("BEEP") // キャプチャ完了の合図音
+fend
+
+// 数値のゼロ埋め処理
+function ZeroPadding(num, digits)
+    dim formatted = FORMAT(num, digits)
+    result = REPLACE(formatted, " ", "0")
+fend
+
+// キーが離されるのを待つ（長押しによる連続入力を防ぐため）
+procedure WaitKeyRelease(vk)
+    while GETKEYSTATE(vk)
+        SLEEP(0.03)
+    wend
+fend
